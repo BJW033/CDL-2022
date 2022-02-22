@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Jan 20 17:50:26 2022
+
+@author: bwu
+"""
+
+
+import requests
+from bs4 import BeautifulSoup
+import bs4
+import pandas as pd
+from datetime import datetime
+
+
+
+scrap = True
+page_num = 1
+final_match_DF = pd.DataFrame()
+final_player_data_DF = pd.DataFrame()
+map_id_scores = 0
+map_id_players = 0
+
+# Iterate though all the pages of matches the website has
+while scrap:
+    
+    print("Scraping Page Number " + str(page_num))
+    MASTER_URL = "https://breakingpoint.gg/matches/page/" + str(page_num) + "/"
+    headers_m = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36'}
+    page_m = requests.get(MASTER_URL, headers=headers_m)
+    #print(page.content.decode())
+    
+    
+    soup_m = BeautifulSoup(page_m.content, "html.parser")
+    #print(soup)
+    
+    results_m = soup_m.find(id="primary")
+    
+    # After the page is loaded, it checks to make sure the page actually
+    # has match links. If results_m is not bs4.element.Tag, the page
+    # has no matches and the loop is exited. 
+    if not isinstance(results_m, bs4.element.Tag):
+        print(str(page_num) + "STOP")
+        break
+    
+    # Scrap the first page (for testing purposes)
+    # if page_num > 1:
+    #     print(str(page_num) + "STOP")
+    #     break
+    
+
+    # Gets all the links and dates to each individual match to iterate through.
+    links = []
+    for x in results_m.find_all('h2',class_='posts__title'):
+        links.append(x.a['href'])
+    dates = []
+    for x in results_m.find_all('time',class_='posts__date'):
+        dates.append(x.text)
+        
+    #iteration tracker
+    index = 0
+    
+    # Iterates though the links of matches on each page. If the date of the 
+    # match is in 2021, it is skipped. At some point, entire pages are skipped.
+    # If the "<" is flipped to ">", the 2021 data is taken. 
+    for link in links:
+        if datetime.strptime(dates[index], '%B %d, %Y') < datetime(2022,1,1):
+                #print(dates[index])
+                index = index+1
+                break
+    
+        URL = link
+        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36'}
+        page = requests.get(URL, headers=headers)
+        #print(page.content.decode())
+        
+        
+        soup = BeautifulSoup(page.content, "html.parser")
+        #print(soup)
+        
+        results = soup.find(id="primary")
+        
+        map_list = []
+        
+        # Iterates though the individual maps backwards from 9 to 1. 
+        for m in range(9,0,-1):
+            map_number = "game-" + str(m) + " game-tab"
+            game = results.find_all("div", class_=map_number)
+            # If len(game) = 0, then the series did not have that many games
+            # Ex: When m=9 and len(game) = 0, the series did not go 9 games.
+            if len(game) != 0 :
+                # Collect the match overall score, game mode, and teams, 
+                # gives the map an id, who won, and match date
+                game_mode = (game[0].find("div",class_="title").text).split()
+                team_names = results.find_all("div", class_="team-name")
+                teams = [] 
+                for x in range(0,2):
+                    teams.append(team_names[x].text)
+                    teams.append(int(game[0].find_all("span",class_="team-score")[x].text))
+                teams.append(map_id_scores)
+                teams.append(game_mode[3])
+                
+                winner = game[0].find_all("span",class_="win")[0].find_all("span",class_="team-name")[0].text
+                if winner == teams[0]:
+                    teams.append(1)
+                else:
+                    teams.append(0)
+                teams.append(dates[index])
+                games_DF = pd.DataFrame(teams) 
+                games_DF = games_DF.transpose()
+                games_DF.columns = ['Team_A','A_pts','Team_B','B_pts','game_id','Game_Mode','Team_A_Win','Date']
+                map_list.append(games_DF)
+                map_id_scores = map_id_scores + 1
+        
+        add_match_DF = pd.concat(map_list)
+        
+        # Concates the match to a global variable for output
+        final_match_DF = pd.concat([final_match_DF,add_match_DF])
+        #print(matches_DB)
+        
+        
+        # Get the data from each player
+        players = results.find_all("div", class_="player")
+        
+        # Gets the table headers
+        columns = results.find_all("div", class_="titles")
+        column_names = []
+        for x in range(0,6):
+            column_names.append(columns[0].find_all("span")[x].text)
+        column_names.append("Team") 
+        column_names.append("game_id")
+        
+        team_names = results.find_all("div", class_="team-name")
+        
+        # Player data includes: Name, Kills, Deaths, K/D, +/-, Damage,
+        # Team Name, game_id
+        teams = [] 
+        for x in range(0,2):
+            teams.append(team_names[x].text)
+
+        match_data = []
+        
+        p = []
+        
+        # Creates and array of arrays, one array for each player.
+        for y in range(0,len(players)):   
+            match_data.append([])
+
+        g = 1
+        # Iterates through the table of players adding data to each individual
+        # array in match_data. The variable g is used to count during the iteration
+        # of players in order to correctly assign the players to the right team.
+        for y in range(0,len(players)):   
+            for x in range(0,6):
+                match_data[y].append(players[y].find_all("span")[x].text)
+            if y < (g*4):
+                #print(str(y) + " " + str(g*4))
+                match_data[y].append(teams[0])
+            else:
+                #print(str(y) + " " + str(g*4))
+                match_data[y].append(teams[1])
+            match_data[y].append(map_id_players)
+            if y in [7,15,23,31,39,47,55,63,71]:
+                g = g+2
+                map_id_players = map_id_players + 1
+       
+        # Collects each map data to a global dataframe to output later
+        Player_Data_DF = pd.DataFrame(match_data)
+        #print(Player_Data_DF)
+        Player_Data_DF.columns = column_names
+        final_player_data_DF = pd.concat([final_player_data_DF,Player_Data_DF])
+        
+        index = index + 1
+        
+    page_num = page_num + 1
+
+# Resets the index of final data frames
+final_match_DF.reset_index(drop=True,inplace = True)
+final_player_data_DF.reset_index(drop=True,inplace=True)
+
+# Output data to CSVs
+final_match_DF.to_csv('match_scores_2022.csv', index = False)
+final_player_data_DF.to_csv('player_data_2022.csv', index = False)
+
